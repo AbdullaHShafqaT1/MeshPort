@@ -39,6 +39,18 @@ def scene_facts():
 bpy.ops.wm.read_factory_settings(use_empty=True)
 assert 'FINISHED' in bpy.ops.import_scene.gltf(filepath=str(source))
 before, images = scene_facts()
+# Blender imports an unlit GLB as an emission graph. Its FBX exporter reads
+# the Principled base color input, so reconnect the same photo atlas for FBX.
+for material in bpy.data.materials:
+    if not material.use_nodes:
+        continue
+    nodes = material.node_tree.nodes
+    textures_used = [n for n in nodes if n.type == 'TEX_IMAGE' and n.image in images]
+    if len(textures_used) == 1 and not any(n.type == 'BSDF_PRINCIPLED' for n in nodes):
+        shader = nodes.new('ShaderNodeBsdfPrincipled')
+        output = next(n for n in nodes if n.type == 'OUTPUT_MATERIAL' and n.is_active_output)
+        material.node_tree.links.new(textures_used[0].outputs['Color'], shader.inputs['Base Color'])
+        material.node_tree.links.new(shader.outputs['BSDF'], output.inputs['Surface'])
 assert images and before['uv_loops'], 'The source must have UVs and a linked texture'
 textures = []
 for index, image in enumerate(dict.fromkeys(images)):

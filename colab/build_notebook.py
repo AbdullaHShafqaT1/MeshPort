@@ -5,14 +5,16 @@ nb={'cells':[{'cell_type':'markdown','metadata':{},'source':[]}]+[{'cell_type':'
 nb['cells'][1]['source']=(root/'verify_cell.py').read_text().splitlines(True)
 nb['cells'][2]['source']=(root/'setup_cell.py').read_text().splitlines(True)
 source=(root/'service.py').read_text()
+ast.parse(source)
 launch='''# @title 2. Start the image-to-3D service
 import os, pathlib, subprocess, secrets, time, urllib.request
-'''+ 'service_source = '+repr(source)+'\n'+'''
+'''+ 'service_source = '+repr(source)+'\nphoto_source = '+repr((root/'photo_finish.py').read_text())+'\n'+'''
 if 'studio_proc' in globals() and studio_proc.poll() is None:
     raise RuntimeError('The service is already running. Run the final cell to copy its URL, or restart the runtime for changed code.')
 STUDIO_KEY=secrets.token_urlsafe(32)
 path=pathlib.Path('/content/TRELLIS/form_service.py')
 path.write_text(service_source)
+path.with_name('photo_finish.py').write_text(photo_source)
 env=os.environ.copy()
 env.update(STUDIO_KEY=STUDIO_KEY, PATH='/content/trellis-env/bin:'+env['PATH'], CUDA_HOME='/content/trellis-env', CC='/content/trellis-env/bin/x86_64-conda-linux-gnu-cc', CXX='/content/trellis-env/bin/x86_64-conda-linux-gnu-c++', ATTN_BACKEND='xformers', SPCONV_ALGO='native', TORCH_CUDA_ARCH_LIST='8.0', MAX_JOBS='4')
 env['CPATH']=':'.join(['/content/trellis-env/targets/x86_64-linux/include']+[str(p) for p in pathlib.Path('/content/trellis-env/lib/python3.10/site-packages/nvidia').glob('*/include')])
@@ -51,7 +53,7 @@ print('Paste this entire URL into MeshPort (keep it private):')
 print(match.group(0)+'/#key='+STUDIO_KEY)
 print('Keep this Colab runtime connected. Reconnecting a new runtime creates a new URL.')
 '''
-nb['cells'][0]['source']=['# MeshPort · Colab A100\n\nRun all cells, then paste the complete URL printed by the final cell into the localhost app. Upload one image or up to six views of the same object in localhost. Generation runs here; preview and textured FBX conversion run locally.\n\nSelect an A100 GPU before running. First setup and downloads can take several minutes. The tunnel requires a random session key included in the URL fragment. Treat the complete URL as private; notebook outputs may contain that key. Clear outputs before sharing the notebook. Keep Colab connected.\n\nUses TRELLIS-image-large with seed 42, 16 sampling steps and 2048 textures. More runtime does not guarantee better reconstruction. Multi-image conditioning is experimental.\n']
+nb['cells'][0]['source']=['# MeshPort · Colab A100\n\nRun all cells, then paste the complete URL printed by the final cell into the localhost app. Upload one image or up to six views of the same object in localhost. Generation runs here; preview and textured FBX conversion run locally.\n\nSelect an A100 GPU before running. First setup and downloads can take several minutes. The tunnel requires a random session key included in the URL fragment. Treat the complete URL as private; notebook outputs may contain that key. Clear outputs before sharing the notebook. Keep Colab connected.\n\nUses TRELLIS-image-large with seed 42, 16 sampling steps and 2048 textures. For multiple inputs, TRELLIS blends each view at every geometry and appearance step. This requires more GPU time as the number of views grows. Multi-image conditioning is experimental.\n']
 for index,code in [(3,launch),(4,tunnel)]:
  ast.parse(code);nb['cells'][index]['source']=code.splitlines(True);nb['cells'][index]['outputs']=[];nb['cells'][index]['execution_count']=None
 (root/'meshport_colab.ipynb').write_text(json.dumps(nb,indent=2)+'\n')

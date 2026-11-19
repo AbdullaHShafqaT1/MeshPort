@@ -60,6 +60,7 @@ fi
 if ! python -c 'import diff_gaussian_rasterization' >/dev/null 2>&1; then
   python -m pip install --no-build-isolation /content/trellis-extensions/mip-splatting/submodules/diff-gaussian-rasterization
 fi
+python -m pip install numba
 python -m pip check
 python -u -c "import torch,numpy,scipy,kaolin,nvdiffrast.torch,diff_gaussian_rasterization; from trellis.pipelines import TrellisImageTo3DPipeline; from trellis.utils import postprocessing_utils; assert torch.cuda.is_available(); nvdiffrast.torch.RasterizeCudaContext(); print('VERIFIED',torch.__version__,numpy.__version__,scipy.__version__,torch.cuda.get_device_name(0))"
 printf '

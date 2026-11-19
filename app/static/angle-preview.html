@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light">
+    <title>Angle Preview · MeshPort</title>
+    <link rel="stylesheet" href="/static/angle-preview.css">
+    <script src="/static/reference-views.js" defer></script>
+    <script src="/static/angle-preview.js" defer></script>
+</head>
+<body>
+    <header class="site-header">
+        <a class="brand" href="/" aria-label="MeshPort home"><span aria-hidden="true">◈</span> MeshPort</a>
+        <a class="studio-link" href="/"><span aria-hidden="true">←</span> Back to studio</a>
+    </header>
+    <main>
+        <div class="intro">
+            <div>
+                <p class="eyebrow">REFERENCE TOOLS / PREVIEW</p>
+                <h1>Separate views <em>from one image.</em></h1>
+                <p>Upload a reference sheet to find and crop the different angles of your subject.</p>
+            </div>
+            <span class="local-badge"><span aria-hidden="true"></span> Local analysis</span>
+        </div>
+
+        <div class="workspace">
+            <section class="panel upload-panel" aria-labelledby="upload-title">
+                <div class="section-title">
+                    <span class="step" aria-hidden="true">01</span>
+                    <h2 id="upload-title">Reference sheet</h2>
+                </div>
+                <p class="hint">Choose one image with several views of the same subject.</p>
+                <button class="drop" type="button" id="pick">
+                    <span class="upload-icon" aria-hidden="true">↥</span>
+                    <strong>Choose an image</strong>
+                    <span>or drop one here</span>
+                    <small>PNG, JPG, WebP · up to 16 MP and 16 MiB</small>
+                </button>
+                <input id="file" type="file" accept="image/png,image/jpeg,image/webp" hidden>
+                <div id="file-info" class="file-info" hidden>
+                    <div>
+                        <strong id="file-name"></strong>
+                        <span id="file-size"></span>
+                    </div>
+                    <button id="remove" class="text-button" type="button">Remove</button>
+                </div>
+                <button id="analyze" type="button" class="primary" disabled>
+                    Separate angles <span aria-hidden="true">↗</span>
+                </button>
+                <p id="status" class="status" role="status"><span class="spinner" aria-hidden="true" hidden></span><span id="status-text">Add an image to get started.</span></p>
+            </section>
+
+            <section class="panel source-panel" aria-labelledby="source-title">
+                <div class="panel-heading">
+                    <div class="section-title">
+                        <span class="step" aria-hidden="true">02</span>
+                        <h2 id="source-title">Original image</h2>
+                    </div>
+                    <button id="toggle-boxes" class="text-button" type="button" aria-pressed="true" hidden>Crop outlines</button>
+                </div>
+                <div class="image-stage">
+                    <div id="source-empty" class="empty-state">
+                        <span class="empty-icon" aria-hidden="true">◇</span>
+                        <p>Your reference sheet will appear here.</p>
+                    </div>
+                    <div id="source-frame" class="source-frame" hidden>
+                        <img id="source-image" alt="Uploaded reference sheet">
+                        <div id="crop-outlines" class="crop-outlines" aria-hidden="true"></div>
+                    </div>
+                </div>
+            </section>
+        </div>
+
+        <section class="panel results-panel" aria-labelledby="results-title">
+            <div class="panel-heading">
+                <div class="section-title">
+                    <span class="step" aria-hidden="true">03</span>
+                    <h2 id="results-title">Separated angles</h2>
+                </div>
+                <span id="result-meta" class="result-meta"></span>
+            </div>
+            <p id="results-empty" class="hint">Crops will appear here after analysis.</p>
+            <div id="crops" class="crop-grid"></div>
+            <div id="coverage" class="coverage" hidden>
+                <h3>Views not detected</h3>
+                <ul id="missing"></ul>
+            </div>
+            <div id="handoff" class="handoff" hidden>
+                <div>
+                    <h3 id="selected-summary" aria-live="polite"></h3>
+                    <p>Review the selected views in the studio. They go to Colab when you create a model.</p>
+                    <p id="handoff-error" class="handoff-error" role="status"></p>
+                </div>
+                <button id="send-to-studio" class="primary" type="button">
+                    Use selected views in studio <span aria-hidden="true">↗</span>
+                </button>
+            </div>
+        </section>
+
+        <footer>
+            <span>MESHPORT / ANGLE PREVIEW</span>
+            <span>Image analysis runs on your computer with Ollama.</span>
+        </footer>
+    </main>
+</body>
+</html>
