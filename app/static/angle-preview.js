@@ -3,6 +3,7 @@ const fileInput = byId('file');
 const pick = byId('pick');
 const analyze = byId('analyze');
 const remove = byId('remove');
+const changeFile = byId('change-file');
 const source = byId('source-image');
 const boxes = byId('crop-outlines');
 const toggle = byId('toggle-boxes');
@@ -27,6 +28,36 @@ let running = false;
 let staging = false;
 let selections = [];
 
+function openImagePreview(src, title) {
+    if (!src || !byId('imageModal')) return;
+    byId('modalImg').src = src;
+    byId('modalTitle').textContent = title || 'Image preview';
+    byId('modalOpenTab').href = src;
+    byId('modalDownload').href = src;
+    byId('modalDownload').download = title || 'crop.png';
+    byId('imageModal').hidden = false;
+}
+function closeImagePreview() {
+    if (!byId('imageModal')) return;
+    byId('imageModal').hidden = true;
+    byId('modalImg').src = '';
+}
+if (byId('modalClose')) {
+    byId('modalClose').addEventListener('click', closeImagePreview);
+    byId('imageModal').addEventListener('click', (e) => { if (e.target === byId('imageModal')) closeImagePreview(); });
+    window.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !byId('imageModal').hidden) closeImagePreview(); });
+}
+function applyTheme(mode) {
+    const light = mode === 'light';
+    document.body.classList.toggle('light-mode', light);
+    if (byId('themeToggle')) byId('themeToggle').textContent = light ? '☾ Dark mode' : '☀ Light mode';
+    try { localStorage.setItem('meshport-theme', light ? 'light' : 'dark'); } catch {}
+}
+try { applyTheme(localStorage.getItem('meshport-theme') || 'dark'); } catch { applyTheme('dark'); }
+if (byId('themeToggle')) {
+    byId('themeToggle').addEventListener('click', () => applyTheme(document.body.classList.contains('light-mode') ? 'dark' : 'light'));
+}
+
 function setStatus(message, error = false) {
     byId('status-text').textContent = message;
     byId('status').classList.toggle('error', error);
@@ -35,8 +66,12 @@ function setStatus(message, error = false) {
 function updateControls() {
     pick.disabled = running || staging;
     remove.disabled = running || staging;
+    if (changeFile) changeFile.disabled = running || staging;
     analyze.disabled = running || staging || !file;
-    byId('status').querySelector('.spinner').hidden = !running;
+    analyze.innerHTML = running
+        ? '<span class="spinner" aria-hidden="true"></span> Separating angles…'
+        : 'Separate angles <span aria-hidden="true">↗</span>';
+    byId('status').querySelector('.spinner').hidden = !running && !staging;
     byId('results-title').closest('section').setAttribute('aria-busy', String(running));
     updateHandoff();
 }
@@ -49,6 +84,9 @@ function updateHandoff() {
     byId('selected-summary').textContent = `${selected.length} of ${selections.length} views selected · ${(size / 1024 ** 2).toFixed(2)} MiB`;
     byId('handoff-error').textContent = error ? error + ' Deselect views to continue.' : '';
     sendToStudio.disabled = staging || running || !selected.length || Boolean(error);
+    sendToStudio.innerHTML = staging
+        ? '<span class="spinner" aria-hidden="true"></span> Opening in studio…'
+        : 'Use selected views in studio <span aria-hidden="true">↗</span>';
     for (const view of selections) view.checkbox.disabled = staging;
 }
 
@@ -113,6 +151,8 @@ function renderCrop(view, number) {
     const image = document.createElement('img');
     image.src = view.image;
     image.alt = `${label} crop`;
+    image.title = `Click to preview ${label} crop`;
+    image.addEventListener('click', () => openImagePreview(view.image, `${number}. ${label}`));
     const caption = document.createElement('figcaption');
     const heading = document.createElement('div');
     heading.className = 'crop-label';
@@ -172,10 +212,12 @@ function showResult({ views, missing, model, width, height }) {
         byId('missing').append(chip);
     }
     byId('coverage').hidden = !missing.length;
-    setStatus(count ? `${count} ${count === 1 ? 'crop is' : 'crops are'} ready to review.` : 'Analysis finished without finding a view.');
+    setStatus(count ? `${count} ${count === 1 ? 'crop is' : 'crops are'} ready to review. Click any image to preview.` : 'Analysis finished without finding a view.');
 }
 
 pick.addEventListener('click', () => fileInput.click());
+if (changeFile) changeFile.addEventListener('click', () => fileInput.click());
+source.addEventListener('click', () => { if (sourceUrl) openImagePreview(sourceUrl, file?.name || 'Original sheet'); });
 fileInput.addEventListener('change', () => {
     choose(fileInput.files);
     fileInput.value = '';

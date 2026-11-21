@@ -3,7 +3,7 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="color-scheme" content="light">
+    <meta name="color-scheme" content="dark light">
     <title>Angle Preview · MeshPort</title>
     <link rel="stylesheet" href="/static/angle-preview.css">
     <script src="/static/reference-views.js" defer></script>
@@ -12,7 +12,10 @@
 <body>
     <header class="site-header">
         <a class="brand" href="/" aria-label="MeshPort home"><span aria-hidden="true">◈</span> MeshPort</a>
-        <a class="studio-link" href="/"><span aria-hidden="true">←</span> Back to studio</a>
+        <div class="header-actions">
+            <button id="themeToggle" class="text-button" type="button" aria-label="Toggle dark or light theme">☀ Light mode</button>
+            <a class="studio-link" href="/"><span aria-hidden="true">←</span> Back to studio</a>
+        </div>
     </header>
     <main>
         <div class="intro">
@@ -43,7 +46,10 @@
                         <strong id="file-name"></strong>
                         <span id="file-size"></span>
                     </div>
-                    <button id="remove" class="text-button" type="button">Remove</button>
+                    <div class="file-info-actions">
+                        <button id="change-file" class="text-button" type="button">Change image</button>
+                        <button id="remove" class="text-button" type="button">Remove</button>
+                    </div>
                 </div>
                 <button id="analyze" type="button" class="primary" disabled>
                     Separate angles <span aria-hidden="true">↗</span>
@@ -65,7 +71,7 @@
                         <p>Your reference sheet will appear here.</p>
                     </div>
                     <div id="source-frame" class="source-frame" hidden>
-                        <img id="source-image" alt="Uploaded reference sheet">
+                        <img id="source-image" alt="Uploaded reference sheet" title="Click to preview full image">
                         <div id="crop-outlines" class="crop-outlines" aria-hidden="true"></div>
                     </div>
                 </div>
@@ -103,5 +109,20 @@
             <span>Image analysis runs on your computer with Ollama.</span>
         </footer>
     </main>
+    <div id="imageModal" class="image-modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle" hidden>
+        <div class="image-modal-card">
+            <div class="image-modal-bar">
+                <strong id="modalTitle">Image preview</strong>
+                <div class="image-modal-actions">
+                    <a id="modalOpenTab" class="text-button" target="_blank" rel="noopener">Open in new tab ↗</a>
+                    <a id="modalDownload" class="text-button" download>Download ↓</a>
+                    <button id="modalClose" class="text-button" type="button" aria-label="Close preview">✕ Close</button>
+                </div>
+            </div>
+            <div class="image-modal-stage">
+                <img id="modalImg" alt="Full-size preview">
+            </div>
+        </div>
+    </div>
 </body>
 </html>
