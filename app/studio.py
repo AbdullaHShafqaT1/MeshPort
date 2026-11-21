@@ -249,7 +249,7 @@ def file(job_id: str,filename: str):
     if not re.fullmatch(r'[a-f0-9]{32}',job_id) or filename not in {'model.glb','model.fbx','model_fbx_with_textures.zip'}:raise HTTPException(404)
     path=OUT/job_id/filename
     if not path.is_file():raise HTTPException(404)
-    return FileResponse(path,filename=filename)
+    return FileResponse(path,filename=filename,headers={'Cache-Control':'no-store'})
 
 @app.get('/api/notebook')
 def notebook():
