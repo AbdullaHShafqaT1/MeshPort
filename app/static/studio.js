@@ -1,7 +1,34 @@
 const $=id=>document.getElementById(id);let files=[],connected=false,running=false,model=null,scene,camera,renderer,controls;const urls=[];
 const angles = new WeakMap();
-let importing = false;
+let importing = false, connecting = false, modelLoading = false;
 let autoTimer, pendingUpload = false;
+let currentSheet = null, sheetPreviewUrl = null;
+function openImagePreview(src, title) {
+    if (!src) return;
+    $('modalImg').src = src;
+    $('modalTitle').textContent = title || 'Image preview';
+    $('modalOpenTab').href = src;
+    $('modalDownload').href = src;
+    $('modalDownload').download = title || 'reference.png';
+    $('imageModal').hidden = false;
+}
+function closeImagePreview() {
+    $('imageModal').hidden = true;
+    $('modalImg').src = '';
+}
+function showSheetFile(file) {
+    if (!file) return;
+    currentSheet = file;
+    if (sheetPreviewUrl) URL.revokeObjectURL(sheetPreviewUrl);
+    sheetPreviewUrl = URL.createObjectURL(file);
+    $('sheetName').textContent = file.name;
+    $('sheetPreviewImg').src = sheetPreviewUrl;
+    $('sheetPreviewTitle').textContent = file.name;
+    $('sheetPreviewTitle').title = file.name;
+    $('sheetPreviewInfo').textContent = (file.size / 1024 ** 2).toFixed(2) + ' MiB';
+    $('sheetPreview').hidden = false;
+    $('sheetDrop').hidden = true;
+}
 function queueGeneration() {
     clearTimeout(autoTimer);
     if (!pendingUpload || !connected || running || importing || !files.length || !$('automatic').checked) return;
@@ -19,26 +46,78 @@ const conditioningLabels = new Map([
     ['multi-image-stochastic', 'Multi-view · Stochastic'],
     ['multi-image-multidiffusion', 'Multi-view · MultiDiffusion'],
 ]);
-function message(text,error=false){$('message').textContent=text;$('message').classList.toggle('error',error)}
+function message(text,error=false,loading=false){
+    const el=$('message');
+    if (loading && el.replaceChildren) {
+        const sp=document.createElement('span');sp.className='spinner inline-spinner';
+        const tx=document.createElement('span');tx.textContent=text;
+        el.replaceChildren(sp,tx);
+    } else {
+        el.textContent=text;
+    }
+    el.classList.toggle('error',error);
+}
+function setSheetStatus(text,loading=false){
+    const el=$('sheetStatus');
+    if (loading && el.replaceChildren) {
+        const sp=document.createElement('span');sp.className='spinner inline-spinner';
+        const tx=document.createElement('span');tx.textContent=text;
+        el.replaceChildren(sp,tx);
+    } else {
+        el.textContent=text;
+    }
+}
 function ready(){
     const busy = running || importing;
+    const hasSheet = Boolean($('sheet').files?.length || currentSheet);
     $('generate').disabled = !connected || !files.length || Boolean(validateReferences(files)) || busy;
-    $('connect').disabled = busy;
+    $('connect').disabled = busy || connecting;
     $('images').disabled = busy;
     $('clear').disabled = busy;
     $('sheet').disabled = busy;
-    $('extract').disabled = busy || !$('sheet').files?.length;
+    $('changeSheet').disabled = busy;
+    $('extract').disabled = busy || !hasSheet;
     document.querySelectorAll('.remove-view').forEach(button => button.disabled = busy);
 }
 async function api(path,body){const response=await fetch(path,{method:body?'POST':'GET',headers:body?{'Content-Type':'application/json'}:{},body:body?JSON.stringify(body):undefined});const value=await response.json();if(!response.ok)throw Error(typeof value.detail==='string'?value.detail:'The request failed. Please try again.');return value}
-$('connect').onclick=async()=>{const button=$('connect');button.disabled=true;button.textContent='Connecting…';try{const info=await api('/api/connect',{url:$('connection').value});connected=true;$('connectionBadge').textContent='● Colab connected';$('connectionBadge').classList.add('connected');$('connectionInfo').textContent=[info.model,info.gpu,conditioningLabels.get(info.multi_view_conditioning)].filter(Boolean).join(' · ');message(info.labeled_cameras ? (files.length?'Ready to create your model.':'Connected. Add reference images.') : 'Connected to an older notebook. Run the updated notebook for direction-aware texturing.')}catch(e){connected=false;pendingUpload=false;$('connectionBadge').textContent='○ Colab disconnected';$('connectionBadge').classList.remove('connected');$('connectionInfo').textContent='';message(e.message,true)}finally{button.textContent='Connect ↗';ready();queueGeneration()}};
+$('connect').onclick=async()=>{
+    const button=$('connect');
+    connecting=true;
+    ready();
+    button.innerHTML='<span class="spinner inline-spinner"></span> Connecting…';
+    $('connectionBadge').innerHTML='<span class="spinner inline-spinner"></span> Connecting to Colab…';
+    $('connectionBadge').classList.remove('connected');
+    try{
+        const info=await api('/api/connect',{url:$('connection').value});
+        connected=true;
+        $('connectionBadge').textContent='● Colab connected';
+        $('connectionBadge').classList.add('connected');
+        $('connectionInfo').textContent=[info.model,info.gpu,conditioningLabels.get(info.multi_view_conditioning)].filter(Boolean).join(' · ');
+        message(info.labeled_cameras ? (files.length?'Ready to create your model.':'Connected. Add reference images.') : 'Connected to an older notebook. Run the updated notebook for direction-aware texturing.');
+    }catch(e){
+        connected=false;
+        pendingUpload=false;
+        $('connectionBadge').textContent='○ Colab disconnected';
+        $('connectionBadge').classList.remove('connected');
+        $('connectionInfo').textContent='';
+        message(e.message,true);
+    }finally{
+        connecting=false;
+        button.textContent='Connect ↗';
+        ready();
+        queueGeneration();
+    }
+};
 function renderViews(){
     urls.splice(0).forEach(URL.revokeObjectURL);
     $('thumbnails').replaceChildren();
     files.forEach((file,index)=>{
         const card=document.createElement('div');card.className='reference-view';
         const img=document.createElement('img');img.src=URL.createObjectURL(file);urls.push(img.src);img.alt=file.name;
-        const name=document.createElement('span');name.textContent=file.name;name.title=file.name;
+        img.title='Click to preview '+file.name;
+        img.onclick=()=>openImagePreview(img.src,file.name);
+        const name=document.createElement('span');name.textContent=file.name;name.title='Click to preview '+file.name;
+        name.onclick=()=>openImagePreview(img.src,file.name);
         const remove=document.createElement('button');remove.type='button';remove.className='remove-view';remove.textContent='Remove';
         remove.setAttribute('aria-label','Remove '+file.name);remove.disabled=running || importing;
         remove.onclick=()=>{if(running || importing)return;files.splice(index,1);renderViews();queueGeneration()};
@@ -46,7 +125,7 @@ function renderViews(){
     });
     $('clear').hidden=!files.length;
     $('viewSummary').textContent=files.length===0?'No views added.':`${files.length} / ${referenceLimit} views · ${files.length===1?'Single-image':'Multi-view'} generation`;
-    message(files.length?'Add more angles or create your model.':connected?'Connected. Add reference images.':'Connect Colab and add images to begin.');
+    message(files.length?'Click any image to preview, add more angles, or create your model.':connected?'Connected. Add reference images.':'Connect Colab and add images to begin.');
     ready();
 }
 function choose(selected){
@@ -70,25 +149,28 @@ $('drop').ondragleave=()=>$('drop').classList.remove('dragover');
 $('drop').ondrop=e=>{e.preventDefault();$('drop').classList.remove('dragover');choose(e.dataTransfer.files)};
 $('sheet').onchange = () => {
     const file = $('sheet').files[0];
-    $('sheetName').textContent = file?.name || 'Choose a reference sheet';
-    $('sheetStatus').textContent = '';
+    if (file) showSheetFile(file);
+    setSheetStatus('');
     clearTimeout(autoTimer);
     pendingUpload = false;
     ready();
     if (file && $('automatic').checked && !$('extract').disabled) $('extract').click();
 };
 $('extract').onclick = async () => {
-    const sheet = $('sheet').files[0];
+    const sheet = $('sheet').files?.[0] || currentSheet;
     if (!sheet || running || importing) return;
     if (!referenceTypes.has(sheet.type) || sheet.size > 16 * 1024 ** 2) {
-        $('sheetStatus').textContent = 'Choose a PNG, JPG or WebP sheet up to 16 MiB.';
+        setSheetStatus('Choose a PNG, JPG or WebP sheet up to 16 MiB.');
         return;
     }
+    showSheetFile(sheet);
     importing = true;
     pendingUpload = false;
     clearTimeout(autoTimer);
     ready();
-    $('sheetStatus').textContent = 'Finding views in the sheet…';
+    $('sheetExtractingOverlay').hidden = false;
+    $('extract').innerHTML = '<span class="spinner inline-spinner"></span> Extracting angles…';
+    setSheetStatus('Finding views in the sheet…', true);
     try {
         const response = await fetch('/api/angle-preview', {
             method: 'POST', headers: {'Content-Type': sheet.type}, body: sheet
@@ -106,31 +188,136 @@ $('extract').onclick = async () => {
         files.push(...crops);
         pendingUpload = true;
         $('sheet').value = '';
-        $('sheetName').textContent = 'Choose a reference sheet';
         renderViews();
-        $('sheetStatus').textContent = crops.length + (crops.length === 1 ? ' view added below.' : ' views added below.');
+        setSheetStatus(crops.length + (crops.length === 1 ? ' view extracted below.' : ' views extracted below.'));
         const issue = validateReferences(files);
-        message(issue ? issue + ' Remove extra views below.' : 'Review the angles below, then click Create 3D model.', Boolean(issue));
+        message(issue ? issue + ' Remove extra views below.' : 'Review or preview the angles below, then click Create 3D model.', Boolean(issue));
     } catch (error) {
-        $('sheetStatus').textContent = error.message;
+        setSheetStatus(error.message);
     } finally {
         importing = false;
+        $('sheetExtractingOverlay').hidden = true;
+        $('extract').textContent = currentSheet ? 'Extract angles again' : 'Extract angles';
         ready();
         queueGeneration();
     }
 };
 const encode=file=>new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result.split(',')[1]);reader.onerror=()=>reject(Error('Could not read '+file.name));reader.readAsDataURL(file)});
-$('generate').onclick=async()=>{pendingUpload=false;clearTimeout(autoTimer);running=true;ready();$('result').hidden=true;$('busy').hidden=false;$('stage').textContent='Sending images to Colab';const start=Date.now();const timer=setInterval(()=>{const seconds=Math.floor((Date.now()-start)/1000);$('elapsed').textContent=Math.floor(seconds/60)+':'+String(seconds%60).padStart(2,'0')},1000);try{const labels=files.map(file=>angles.get(file)||'unknown');const payload={images:await Promise.all(files.map(encode))};if(labels.some(label=>label!=='unknown'))payload.angles=labels;const job=await api('/api/jobs',payload);let result;for(;;){result=await api('/api/jobs/'+job.id);$('stage').textContent=result.stage;if(result.status!=='running')break;await new Promise(r=>setTimeout(r,2000))}if(result.glb)history.replaceState(history.state,'','/?job='+encodeURIComponent(job.id));showResult(result);if(result.status==='failed')throw Error(result.error);message('Your model is ready. Rotate it above or download your FBX.')}catch(e){message(e.message,true)}finally{running=false;clearInterval(timer);$('busy').hidden=true;ready()}};
+
+$('changeSheet').onclick = () => { if (!running && !importing) $('sheet').click(); };
+$('sheetPreviewOpen').onclick = () => { if (sheetPreviewUrl) openImagePreview(sheetPreviewUrl, currentSheet?.name || 'Reference sheet'); };
+$('previewSheetBtn').onclick = () => { if (sheetPreviewUrl) openImagePreview(sheetPreviewUrl, currentSheet?.name || 'Reference sheet'); };
+$('sheetDrop').ondragover = e => { e.preventDefault(); $('sheetDrop').classList.add('dragover'); };
+$('sheetDrop').ondragleave = () => $('sheetDrop').classList.remove('dragover');
+$('sheetDrop').ondrop = e => {
+    e.preventDefault();
+    $('sheetDrop').classList.remove('dragover');
+    if (running || importing || !e.dataTransfer.files?.length) return;
+    showSheetFile(e.dataTransfer.files[0]);
+    ready();
+    if ($('automatic').checked && !$('extract').disabled) $('extract').click();
+};
+$('modalClose').onclick = closeImagePreview;
+$('imageModal').onclick = e => { if (e.target === $('imageModal')) closeImagePreview(); };
+window.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('imageModal').hidden) closeImagePreview(); });
+
+function applyTheme(mode) {
+    const light = mode === 'light';
+    document.body.classList.toggle('light-mode', light);
+    $('themeToggle').textContent = light ? '☾ Dark mode' : '☀ Light mode';
+    try { localStorage.setItem('meshport-theme', light ? 'light' : 'dark'); } catch {}
+}
+try { applyTheme(localStorage.getItem('meshport-theme') || 'dark'); } catch { applyTheme('dark'); }
+$('themeToggle').onclick = () => applyTheme(document.body.classList.contains('light-mode') ? 'dark' : 'light');
+
+$('generate').onclick=async()=>{
+    pendingUpload=false;
+    clearTimeout(autoTimer);
+    running=true;
+    ready();
+    $('result').hidden=true;
+    $('busy').hidden=false;
+    $('busyNote').textContent='You can leave this page open while Colab works.';
+    $('stage').textContent='Sending images to Colab';
+    $('generate').innerHTML='<span class="spinner inline-spinner"></span> Generating 3D model…';
+    const start=Date.now();
+    const timer=setInterval(()=>{
+        const seconds=Math.floor((Date.now()-start)/1000);
+        $('elapsed').textContent=Math.floor(seconds/60)+':'+String(seconds%60).padStart(2,'0');
+    },1000);
+    try{
+        const labels=files.map(file=>angles.get(file)||'unknown');
+        const payload={images:await Promise.all(files.map(encode))};
+        if(labels.some(label=>label!=='unknown'))payload.angles=labels;
+        const job=await api('/api/jobs',payload);
+        let result;
+        for(;;){
+            result=await api('/api/jobs/'+job.id);
+            $('stage').textContent=result.stage;
+            if(result.status!=='running')break;
+            await new Promise(r=>setTimeout(r,2000));
+        }
+        if(result.glb)history.replaceState(history.state,'','/?job='+encodeURIComponent(job.id));
+        showResult(result);
+        if(result.status==='failed')throw Error(result.error);
+        message('Your model is ready. Rotate it above or download your FBX.');
+    }catch(e){
+        message(e.message,true);
+    }finally{
+        running=false;
+        clearInterval(timer);
+        if(!modelLoading)$('busy').hidden=true;
+        $('generate').innerHTML='Create 3D model <span>↗</span>';
+        ready();
+    }
+};
 function frame(){if(!model)return;const box=new THREE.Box3().setFromObject(model),size=box.getSize(new THREE.Vector3()),center=box.getCenter(new THREE.Vector3());const distance=Math.max(size.x,size.y,size.z)*2;controls.target.copy(center);camera.position.copy(center).add(new THREE.Vector3(distance,.65*distance,distance));camera.near=distance/1000;camera.far=distance*100;camera.updateProjectionMatrix();controls.update()}
-function loadModel(url){if(!renderer){message('Preview is unavailable because WebGL could not start. Your download links still work.',true);return}new THREE.GLTFLoader().load(url,gltf=>{if(model){scene.remove(model);model.traverse(o=>{if(o.geometry)o.geometry.dispose();const mats=Array.isArray(o.material)?o.material:[o.material];mats.filter(Boolean).forEach(m=>{for(const v of Object.values(m))if(v?.isTexture)v.dispose();m.dispose()})})}model=gltf.scene;scene.add(model);$('empty').hidden=true;$('wireframe').setAttribute('aria-pressed','false');frame()},undefined,()=>message('The model was saved, but the preview could not load. Try the GLB download.',true))}
+function loadModel(url){
+    if(!renderer){message('Preview is unavailable because WebGL could not start. Your download links still work.',true);return}
+    modelLoading = true;
+    $('busy').hidden = false;
+    $('stage').textContent = 'Loading 3D model into viewport…';
+    $('elapsed').textContent = '';
+    $('busyNote').textContent = 'Preparing 3D geometry and 2K photo texture.';
+    const cacheBusted = url + (url.includes('?') ? '&' : '?') + 't=' + Date.now();
+    new THREE.GLTFLoader().load(cacheBusted,gltf=>{
+        modelLoading = false;
+        if(!running)$('busy').hidden = true;
+        if(model){scene.remove(model);model.traverse(o=>{if(o.geometry)o.geometry.dispose();const mats=Array.isArray(o.material)?o.material:[o.material];mats.filter(Boolean).forEach(m=>{for(const v of Object.values(m))if(v?.isTexture)v.dispose();m.dispose()})})}
+        model=gltf.scene;
+        scene.add(model);
+        $('empty').hidden=true;
+        $('wireframe').setAttribute('aria-pressed','false');
+        frame();
+    },undefined,()=>{
+        modelLoading = false;
+        if(!running)$('busy').hidden = true;
+        message('The model was saved, but the preview could not load. Try the GLB download.',true);
+    });
+}
 try{const container=$('viewport');scene=new THREE.Scene();camera=new THREE.PerspectiveCamera(40,1,.01,100);renderer=new THREE.WebGLRenderer({antialias:true,alpha:true});renderer.setPixelRatio(Math.min(devicePixelRatio,2));renderer.outputEncoding=THREE.sRGBEncoding;renderer.toneMapping=THREE.NoToneMapping;container.append(renderer.domElement);controls=new THREE.OrbitControls(camera,renderer.domElement);controls.enableDamping=true;scene.add(new THREE.HemisphereLight(0xffffff,0x7c886c,1.6));for(const [x,y,z,power] of [[4,6,4,1.8],[-4,2,-2,.8]]){const light=new THREE.DirectionalLight(0xffffff,power);light.position.set(x,y,z);scene.add(light)}new ResizeObserver(()=>{const w=container.clientWidth,h=container.clientHeight;renderer.setSize(w,h);camera.aspect=w/h;camera.updateProjectionMatrix()}).observe(container);function animate(){requestAnimationFrame(animate);controls.update();renderer.render(scene,camera)}animate()}catch(e){$('empty').querySelector('p').textContent='3D preview needs WebGL. Downloads will still work.'}
 $('reset').onclick=frame;$('wireframe').onclick=()=>{if(!model)return;const enabled=$('wireframe').getAttribute('aria-pressed')!=='true';$('wireframe').setAttribute('aria-pressed',String(enabled));model.traverse(o=>{const mats=Array.isArray(o.material)?o.material:[o.material];mats.filter(Boolean).forEach(m=>m.wireframe=enabled)})};
-api('/api/status').then(s=>{connected=s.connected;if(connected){$('connectionBadge').textContent='● Colab connection saved';$('connectionInfo').textContent=conditioningLabels.get(s.multi_view_conditioning)||'The saved connection will be checked when you generate.'}ready();queueGeneration()}).catch(()=>{});
+api('/api/status').then(s=>{
+    connected=s.connected;
+    if(connected){
+        $('connectionBadge').textContent='● Colab connection saved';
+        $('connectionBadge').classList.add('connected');
+        $('connectionInfo').textContent=conditioningLabels.get(s.multi_view_conditioning)||'The saved connection will be checked when you generate.';
+    } else {
+        $('connectionBadge').textContent='○ Colab disconnected';
+        $('connectionBadge').classList.remove('connected');
+    }
+    ready();
+    queueGeneration();
+}).catch(()=>{
+    $('connectionBadge').textContent='○ Colab disconnected';
+    $('connectionBadge').classList.remove('connected');
+});
 
 async function importCrops(token) {
     importing = true;
     ready();
-    message('Loading the selected crops…');
+    message('Loading the selected crops…', false, true);
     try {
         const incoming = await referenceDrafts.take(token);
         if (!incoming?.length) throw new Error('The selected crops expired. Open the angle separator to choose them again.');
@@ -140,7 +327,7 @@ async function importCrops(token) {
             angles.set(item.file,item.angle);
             return item.file;
         });
-        if (choose(restored)) message('Views loaded from the angle separator. Review them before creating your model.');
+        if (choose(restored)) message('Views loaded from the angle separator. Click any thumbnail to preview.');
     } catch (error) {
         message(error.message || 'Could not load the selected crops. Open the angle separator to try again.', true);
     } finally {
@@ -174,18 +361,23 @@ function showResult(result) {
 }
 
 if (new URLSearchParams(location.search).get('sample') === 'car') {
+    message('Loading sample model…', false, true);
     api('/api/sample').then(result => {
         showResult(result);
         $('modelLabel').textContent = 'Car from TRELLIS on Colab';
         const input = document.createElement('img');
         input.src = '/api/sample/input';
         input.alt = 'Original image used for this car';
+        input.title = 'Click to preview sample input';
+        input.onclick = () => openImagePreview(input.src, 'Sample reference image');
         $('thumbnails').append(input);
+        message('Sample model loaded. Drag to rotate and scroll to zoom.');
     }).catch(error => message(error.message, true));
 }
 
 const savedJob = new URLSearchParams(location.search).get('job');
 if (savedJob && /^[a-f0-9]{32}$/.test(savedJob)) {
+    message('Loading saved model…', false, true);
     api('/api/jobs/'+savedJob).then(result=>{
         showResult(result);
         if(result.status==='complete') message('Saved model loaded. Drag to rotate and scroll to zoom.');
