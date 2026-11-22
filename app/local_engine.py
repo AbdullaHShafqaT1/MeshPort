@@ -311,6 +311,7 @@ def stage_paint(
 
     cfg = Hunyuan3DPaintConfigMLX(max_num_view=max_num_view, resolution=resolution)
     cfg.texture_size = texture_size
+    cfg.mlx_num_inference_steps = int(os.environ.get('MESHPORT_PAINT_STEPS', '25'))
     pipe = Hunyuan3DPaintPipelineMLX(cfg)
     pipe(
         mesh_path=str(shape_glb),
@@ -354,8 +355,24 @@ def stage_refine(
         with Image.open(path) as im:
             pil_images.append(ImageOps.exif_transpose(im).convert('RGBA'))
 
+    orig_tex = getattr(getattr(mesh.visual, 'material', None), 'baseColorTexture', None)
+    if orig_tex is not None:
+        orig_tex = orig_tex.copy()
+
     finish = refine(mesh, pil_images, labels)
+    high_conf_cardinal = sum(
+        1 for item in finish.get('reference_registration', [])
+        if item.get('applied')
+        and item.get('label', '').partition('_nose_')[0] in ('front', 'rear', 'left', 'right', 'top', 'bottom')
+        and float(item.get('silhouette_iou', 0.0)) >= 0.80
+    )
     mat = getattr(mesh.visual, 'material', None)
+    if high_conf_cardinal < 2 and orig_tex is not None and mat is not None:
+        mat.baseColorTexture = orig_tex
+        finish['photo_finish_applied'] = False
+    else:
+        finish['photo_finish_applied'] = True
+
     if mat is not None:
         if hasattr(mat, 'metallicRoughnessTexture'):
             mat.metallicRoughnessTexture = None

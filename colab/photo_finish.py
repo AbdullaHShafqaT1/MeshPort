@@ -160,7 +160,7 @@ def joint_cameras(scores, labels):
             expected_elev = 90 if base == 'top' else -90
             return elev == expected_elev and ((yaw - front) % 90 == 0)
         if base.endswith('three_quarter'):
-            return (20 <= delta <= 70 if base.startswith('front') else 110 <= delta <= 160) and abs(elev) <= 50
+            return (20 <= delta <= 70 if base.startswith('front') else 110 <= delta <= 160) and (-10 <= elev <= 50)
         return True
 
     # The generated object's forward axis is unknown. Score complete assignments
