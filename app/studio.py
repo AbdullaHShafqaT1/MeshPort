@@ -10,6 +10,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from .angle_preview import open_source, router as angle_preview
+from .local_engine import TARGET_FACES, TEXTURE_SIZE, is_local_available, run_local_generation
 from .view_detection import ANGLES, EXTRA_ANGLES, ORIENTED_ANGLES, OLLAMA, DetectionError, detect_views, identify_angle
 from .sheet_panels import split_gutters
 
@@ -28,8 +29,14 @@ class ColabConnection(NamedTuple):
 
 
 connection: ColabConnection | None = None
+local_enabled: bool = True
 jobs = {}
 active = set()
+
+
+def fbx_python() -> str:
+    isolated = ROOT / '.fbx-venv' / 'bin' / 'python'
+    return str(isolated) if isolated.is_file() else sys.executable
 
 @app.middleware('http')
 async def local_only(request, call_next):
@@ -76,11 +83,30 @@ async def connect(body: Connect):
 
 @app.get('/api/status')
 def status():
-    remote=connection
-    result={'connected':remote is not None}
+    remote = connection
+    local_ready = bool(local_enabled and is_local_available())
+    result = {
+        'connected': remote is not None,
+        'local_available': local_ready,
+        'mode': 'colab' if remote is not None else ('local' if local_ready else 'disconnected'),
+        'local_info': {
+            'model': 'Hunyuan3D-2.1 MLX',
+            'gpu': 'Apple Silicon (Metal / MLX)',
+            'target_faces': TARGET_FACES,
+            'texture_size': TEXTURE_SIZE,
+            'multi_view_conditioning': 'local-mlx-pbr-photofinish',
+        } if local_ready else None,
+    }
     if remote and remote.multi_view_conditioning:
-        result['multi_view_conditioning']=remote.multi_view_conditioning
+        result['multi_view_conditioning'] = remote.multi_view_conditioning
     return result
+
+
+@app.post('/api/disconnect')
+def disconnect():
+    global connection
+    connection = None
+    return status()
 
 async def sheet_inputs(raw):
     with open_source(raw) as source:
@@ -190,7 +216,7 @@ async def work(job_id, body, remote: ColabConnection):
             job['glb']=f'/api/files/{job_id}/model.glb'
             job['details']=details
             job['stage']='Exporting textured FBX'
-            proc=await asyncio.create_subprocess_exec(sys.executable,str(ROOT/'app/convert_fbx.py'),str(folder),stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.STDOUT)
+            proc=await asyncio.create_subprocess_exec(fbx_python(),str(ROOT/'app/convert_fbx.py'),str(folder),stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.STDOUT)
             try: log,_=await asyncio.wait_for(proc.communicate(),300)
             except asyncio.TimeoutError:
                 proc.kill();await proc.wait();raise RuntimeError('FBX conversion timed out; GLB is available.')
@@ -204,10 +230,99 @@ async def work(job_id, body, remote: ColabConnection):
     finally:
         (folder/'job.json').write_text(json.dumps(job,indent=2))
 
+
+async def _detect_missing_angles(body: dict) -> list[str]:
+    labels = list(body.get('angles', ['unknown'] * len(body['images'])))
+    if any(label in ('unknown', 'oblique', 'front_three_quarter', 'rear_three_quarter') for label in labels):
+        async with httpx.AsyncClient(base_url=OLLAMA, timeout=httpx.Timeout(60, connect=3), trust_env=False) as detector:
+            for index, label in enumerate(labels):
+                if label in ('unknown', 'oblique', 'front_three_quarter', 'rear_three_quarter'):
+                    try:
+                        with open_source(base64.b64decode(body['images'][index])) as source:
+                            detected = await identify_angle(source, detector)
+                        if label == 'oblique' and detected in ('front', 'rear'):
+                            labels[index] = detected + '_three_quarter'
+                        elif detected in ORIENTED_ANGLES and (label in ('unknown', 'oblique') or detected.startswith(label)):
+                            labels[index] = detected
+                        elif detected != 'unknown' and (label == 'unknown' or label == 'oblique' and detected.endswith('three_quarter')):
+                            labels[index] = detected
+                    except (DetectionError, httpx.RequestError):
+                        break
+    return labels
+
+
+async def work_local(job_id: str, body: dict):
+    job = jobs[job_id]
+    folder = OUT / job_id
+    folder.mkdir()
+    try:
+        input_paths = []
+        for index, encoded in enumerate(body['images']):
+            raw = base64.b64decode(encoded, validate=True)
+            with Image.open(io.BytesIO(raw)) as image:
+                suffix = {'PNG': 'png', 'JPEG': 'jpg', 'WEBP': 'webp'}[image.format]
+            path = folder / f'input-{index+1}.{suffix}'
+            path.write_bytes(raw)
+            input_paths.append(path)
+        if len(body['images']) == 1 and body.get('angles', ['unknown'])[0] == 'unknown':
+            job['stage'] = 'Checking image for multiple views'
+            extracted = await sheet_inputs(raw)
+            if extracted:
+                body = extracted
+                input_paths = []
+                for index, encoded in enumerate(body['images']):
+                    crop_bytes = base64.b64decode(encoded, validate=True)
+                    path = folder / f'crop-{index+1}.webp'
+                    path.write_bytes(crop_bytes)
+                    input_paths.append(path)
+        labels = body.get('angles', ['unknown'] * len(body['images']))
+        if any(label in ('unknown', 'oblique', 'front_three_quarter', 'rear_three_quarter') for label in labels):
+            job['stage'] = 'Identifying camera directions'
+            labels = await _detect_missing_angles(body)
+        details = await run_local_generation(
+            folder,
+            input_paths,
+            labels,
+            lambda stage: job.update(stage=stage),
+        )
+        job['glb'] = f'/api/files/{job_id}/model.glb'
+        job['details'] = details
+        job['stage'] = 'Exporting textured FBX'
+        proc = await asyncio.create_subprocess_exec(
+            fbx_python(),
+            str(ROOT / 'app/convert_fbx.py'),
+            str(folder),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+        try:
+            log, _ = await asyncio.wait_for(proc.communicate(), 300)
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.wait()
+            raise RuntimeError('FBX conversion timed out; GLB is available.')
+        (folder / 'conversion.log').write_bytes(log)
+        if proc.returncode:
+            raise RuntimeError('FBX conversion failed; GLB is available. See conversion.log in the output folder.')
+        job.update(
+            status='complete',
+            stage='Ready to download',
+            fbx=f'/api/files/{job_id}/model.fbx',
+            bundle=f'/api/files/{job_id}/model_fbx_with_textures.zip',
+        )
+    except Exception as exc:
+        message = str(exc) or type(exc).__name__
+        job.update(status='failed', stage='Could not finish', error=message)
+    finally:
+        (folder / 'job.json').write_text(json.dumps(job, indent=2))
+
+
 @app.post('/api/jobs')
 async def generate(request: Request):
     remote=connection
-    if remote is None:raise HTTPException(409,'Connect Colab first.')
+    use_local = remote is None and local_enabled and is_local_available()
+    if remote is None and not use_local:
+        raise HTTPException(409,'Connect Colab or run setup.sh for local Apple Silicon generation.')
     if any(j['status']=='running' for j in jobs.values()):raise HTTPException(409,'A model is already being generated.')
     raw=bytearray()
     async for chunk in request.stream():
@@ -230,8 +345,10 @@ async def generate(request: Request):
     except Exception:raise HTTPException(400,'Choose one to six still PNG, JPEG or WebP images, at most 16 megapixels each and 24 MiB total.')
     if any(j['status']=='running' for j in jobs.values()):raise HTTPException(409,'A model is already being generated.')
     job_id=uuid.uuid4().hex
-    jobs[job_id]={'id':job_id,'status':'running','stage':'Sending images to Colab'}
-    task=asyncio.create_task(work(job_id,body,remote));active.add(task);task.add_done_callback(active.discard)
+    initial_stage = 'Sending images to Colab' if remote is not None else 'Preparing local Apple Silicon generation'
+    jobs[job_id]={'id':job_id,'status':'running','stage':initial_stage}
+    coro = work(job_id,body,remote) if remote is not None else work_local(job_id,body)
+    task=asyncio.create_task(coro);active.add(task);task.add_done_callback(active.discard)
     return jobs[job_id]
 
 @app.get('/api/jobs/{job_id}')

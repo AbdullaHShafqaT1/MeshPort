@@ -4,6 +4,23 @@ Turn reference images into downloadable 3D models through a local browser interf
 
 MeshPort runs the interface, preview, and FBX conversion on your computer. The included Google Colab notebook runs Microsoft TRELLIS on an A100 GPU. Paste the notebook connection URL into MeshPort, upload one image or up to six views of the same object, and download GLB, textured FBX, or an FBX texture bundle.
 
+## Start on macOS (Apple Silicon)
+
+Requirements: Apple Silicon Mac (16 GB+ unified memory recommended), macOS, Git, and [Ollama](https://ollama.com) installed.
+
+Clone the repository and run:
+
+```bash
+git clone https://github.com/AbdullaHShafqaT1/MeshPort.git
+cd MeshPort
+./setup.sh
+./run.sh
+```
+
+Open http://127.0.0.1:8000. Use `./run.sh --port 8001` to choose another port.
+
+`setup.sh` creates `.venv` (Python 3.11 with Apple MLX), `.fbx-venv` (isolated Blender `bpy 4.3.0`), clones `Hunyuan3D-2.1-mlx`, pulls `qwen2.5vl:3b` in Ollama, and downloads the Hunyuan3D-2.1 MLX weights. By default, MeshPort generates **40,000-face** meshes with **4096×4096 PBR textures + multi-view photo refinement** locally on your Mac in memory-isolated stages. You can still paste a Google Colab URL in Step 01 at any time to offload generation to a Colab A100 GPU.
+
 ## Start on Windows
 
 Requirements: Windows, Git, Python 3.10 (64-bit) with the Python launcher, an internet connection, and access to a Google Colab A100 GPU. The local computer does not need an NVIDIA GPU. Colab GPU availability and charges depend on your Google account.

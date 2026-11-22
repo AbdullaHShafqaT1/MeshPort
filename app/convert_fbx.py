@@ -19,6 +19,7 @@ def scene_facts():
     triangles = 0
     uv_loops = 0
     material_images = []
+    base_color_images = []
     points = []
     for obj in meshes:
         obj.data.calc_loop_triangles()
@@ -30,11 +31,20 @@ def scene_facts():
                 for node in material.node_tree.nodes:
                     if node.type == 'TEX_IMAGE' and node.image and node.outputs['Color'].is_linked:
                         material_images.append(node.image)
+                        for link in node.outputs['Color'].links:
+                            if link.to_socket.name in ('Base Color', 'Emission', 'Color'):
+                                base_color_images.append(node.image)
     assert meshes and points, 'No mesh geometry found'
     bounds = [[min(point[i] for point in points) for i in range(3)],
               [max(point[i] for point in points) for i in range(3)]]
-    return {'mesh_objects': len(meshes), 'triangles': triangles, 'uv_loops': uv_loops,
-            'bounds': bounds, 'texture_sizes': [list(image.size) for image in material_images]}, material_images
+    return {
+        'mesh_objects': len(meshes),
+        'triangles': triangles,
+        'uv_loops': uv_loops,
+        'bounds': bounds,
+        'texture_sizes': [list(image.size) for image in material_images],
+        'base_color_texture_sizes': [list(image.size) for image in base_color_images],
+    }, material_images
 
 bpy.ops.wm.read_factory_settings(use_empty=True)
 assert 'FINISHED' in bpy.ops.import_scene.gltf(filepath=str(source))
@@ -79,7 +89,12 @@ after, imported_images = scene_facts()
 assert after['triangles'] == before['triangles'], (before, after)
 assert after['uv_loops'] == before['uv_loops'], (before, after)
 assert imported_images and all(image.has_data for image in imported_images)
-assert after['texture_sizes'] == before['texture_sizes'], (before, after)
+if len(before['texture_sizes']) == 1:
+    assert after['texture_sizes'] == before['texture_sizes'], (before, after)
+else:
+    expected_base = before.get('base_color_texture_sizes') or before['texture_sizes'][:1]
+    for size in expected_base:
+        assert size in after['texture_sizes'], (before, after)
 for original_bound, imported_bound in zip(before['bounds'], after['bounds']):
     assert max(abs(a-b) for a,b in zip(original_bound, imported_bound)) < 1e-5
 

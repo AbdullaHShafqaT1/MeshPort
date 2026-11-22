@@ -1,4 +1,4 @@
-const $=id=>document.getElementById(id);let files=[],connected=false,running=false,model=null,scene,camera,renderer,controls;const urls=[];
+const $=id=>document.getElementById(id);let files=[],connected=false,localAvailable=false,mode='disconnected',running=false,model=null,scene,camera,renderer,controls;const urls=[];
 const angles = new WeakMap();
 let importing = false, connecting = false, modelLoading = false;
 let autoTimer, pendingUpload = false;
@@ -31,7 +31,7 @@ function showSheetFile(file) {
 }
 function queueGeneration() {
     clearTimeout(autoTimer);
-    if (!pendingUpload || !connected || running || importing || !files.length || !$('automatic').checked) return;
+    if (!pendingUpload || !canGenerate() || running || importing || !files.length || !$('automatic').checked) return;
     message('Starting automatically. Add another view now or turn off automatic generation.');
     autoTimer = setTimeout(() => {
         if (pendingUpload && !$('generate').disabled && $('automatic').checked) $('generate').click();
@@ -45,7 +45,35 @@ const conditioningLabels = new Map([
     ['single-image', 'Single image'],
     ['multi-image-stochastic', 'Multi-view · Stochastic'],
     ['multi-image-multidiffusion', 'Multi-view · MultiDiffusion'],
+    ['local-mlx-pbr-photofinish', 'Local MLX · 4K PBR + Photo Finish'],
 ]);
+function canGenerate(){return mode==='local'||mode==='colab';}
+function applyBackendState(s){
+    connected=Boolean(s.connected);
+    localAvailable=Boolean(s.local_available);
+    mode=s.mode||(connected?'colab':(localAvailable?'local':'disconnected'));
+    $('disconnect').hidden=!(connected&&localAvailable);
+    if(mode==='colab'){
+        $('connectionBadge').textContent='● Colab connected';
+        $('connectionBadge').classList.add('connected');
+        $('connectionInfo').textContent=conditioningLabels.get(s.multi_view_conditioning)||'Connected to Colab GPU.';
+        $('qualitySummary').textContent='16 sampling steps · 2K textures';
+        $('qualitySub').textContent='TRELLIS image large · cloud generation · local exports.';
+        $('heroSubtitle').textContent='From a reference image to a textured 3D model. Powered by your Colab GPU.';
+    } else if(mode==='local'){
+        const info=s.local_info||{};
+        $('connectionBadge').textContent='● Local Mac (MLX)';
+        $('connectionBadge').classList.add('connected');
+        $('connectionInfo').textContent=[info.model||'Hunyuan3D-2.1 MLX',info.gpu||'Apple Silicon (Metal / MLX)',`${(info.target_faces||40000).toLocaleString()} faces · ${info.texture_size||4096}px PBR`].join(' · ');
+        $('qualitySummary').textContent=`${(info.target_faces||40000).toLocaleString()} faces · ${Math.round((info.texture_size||4096)/1024)}K PBR textures + Photo Finish`;
+        $('qualitySub').textContent='Hunyuan3D-2.1 MLX · local Apple Silicon · local exports.';
+        $('heroSubtitle').textContent='From a reference image to a 4K PBR textured 3D model. Running locally on your Mac.';
+    } else {
+        $('connectionBadge').textContent='○ Engine disconnected';
+        $('connectionBadge').classList.remove('connected');
+        $('connectionInfo').textContent='Run setup.sh for local Apple Silicon generation or paste a Colab URL.';
+    }
+}
 function message(text,error=false,loading=false){
     const el=$('message');
     if (loading && el.replaceChildren) {
@@ -70,8 +98,9 @@ function setSheetStatus(text,loading=false){
 function ready(){
     const busy = running || importing;
     const hasSheet = Boolean($('sheet').files?.length || currentSheet);
-    $('generate').disabled = !connected || !files.length || Boolean(validateReferences(files)) || busy;
+    $('generate').disabled = !canGenerate() || !files.length || Boolean(validateReferences(files)) || busy;
     $('connect').disabled = busy || connecting;
+    $('disconnect').disabled = busy || connecting;
     $('images').disabled = busy;
     $('clear').disabled = busy;
     $('sheet').disabled = busy;
@@ -89,21 +118,32 @@ $('connect').onclick=async()=>{
     $('connectionBadge').classList.remove('connected');
     try{
         const info=await api('/api/connect',{url:$('connection').value});
-        connected=true;
-        $('connectionBadge').textContent='● Colab connected';
-        $('connectionBadge').classList.add('connected');
+        applyBackendState({connected:true,local_available:localAvailable,mode:'colab',multi_view_conditioning:info.multi_view_conditioning});
         $('connectionInfo').textContent=[info.model,info.gpu,conditioningLabels.get(info.multi_view_conditioning)].filter(Boolean).join(' · ');
-        message(info.labeled_cameras ? (files.length?'Ready to create your model.':'Connected. Add reference images.') : 'Connected to an older notebook. Run the updated notebook for direction-aware texturing.');
+        message(info.labeled_cameras ? (files.length?'Ready to create your model.':'Connected to Colab. Add reference images.') : 'Connected to an older notebook. Run the updated notebook for direction-aware texturing.');
     }catch(e){
-        connected=false;
         pendingUpload=false;
-        $('connectionBadge').textContent='○ Colab disconnected';
-        $('connectionBadge').classList.remove('connected');
-        $('connectionInfo').textContent='';
+        const st=await api('/api/status').catch(()=>({connected:false,local_available:localAvailable}));
+        applyBackendState(st);
         message(e.message,true);
     }finally{
         connecting=false;
         button.textContent='Connect ↗';
+        ready();
+        queueGeneration();
+    }
+};
+$('disconnect').onclick=async()=>{
+    connecting=true;
+    ready();
+    try{
+        const st=await api('/api/disconnect',{});
+        applyBackendState(st);
+        message(files.length?'Switched to Local Mac (MLX). Ready to create your model.':'Switched to Local Mac (MLX). Add reference images.');
+    }catch(e){
+        message(e.message,true);
+    }finally{
+        connecting=false;
         ready();
         queueGeneration();
     }
@@ -125,7 +165,7 @@ function renderViews(){
     });
     $('clear').hidden=!files.length;
     $('viewSummary').textContent=files.length===0?'No views added.':`${files.length} / ${referenceLimit} views · ${files.length===1?'Single-image':'Multi-view'} generation`;
-    message(files.length?'Click any image to preview, add more angles, or create your model.':connected?'Connected. Add reference images.':'Connect Colab and add images to begin.');
+    message(files.length?'Click any image to preview, add more angles, or create your model.':canGenerate()?'Ready. Add reference images.':'Connect Colab or enable local engine to begin.');
     ready();
 }
 function choose(selected){
@@ -237,8 +277,8 @@ $('generate').onclick=async()=>{
     ready();
     $('result').hidden=true;
     $('busy').hidden=false;
-    $('busyNote').textContent='You can leave this page open while Colab works.';
-    $('stage').textContent='Sending images to Colab';
+    $('busyNote').textContent=mode==='colab'?'You can leave this page open while Colab works.':'Running locally on Apple Silicon (MLX). Each stage frees memory automatically.';
+    $('stage').textContent=mode==='colab'?'Sending images to Colab':'Preparing local Apple Silicon generation';
     $('generate').innerHTML='<span class="spinner inline-spinner"></span> Generating 3D model…';
     const start=Date.now();
     const timer=setInterval(()=>{
@@ -278,7 +318,7 @@ function loadModel(url){
     $('busy').hidden = false;
     $('stage').textContent = 'Loading 3D model into viewport…';
     $('elapsed').textContent = '';
-    $('busyNote').textContent = 'Preparing 3D geometry and 2K photo texture.';
+    $('busyNote').textContent = 'Preparing 3D geometry and photo texture.';
     const cacheBusted = url + (url.includes('?') ? '&' : '?') + 't=' + Date.now();
     new THREE.GLTFLoader().load(cacheBusted,gltf=>{
         modelLoading = false;
@@ -298,20 +338,12 @@ function loadModel(url){
 try{const container=$('viewport');scene=new THREE.Scene();camera=new THREE.PerspectiveCamera(40,1,.01,100);renderer=new THREE.WebGLRenderer({antialias:true,alpha:true});renderer.setPixelRatio(Math.min(devicePixelRatio,2));renderer.outputEncoding=THREE.sRGBEncoding;renderer.toneMapping=THREE.NoToneMapping;container.append(renderer.domElement);controls=new THREE.OrbitControls(camera,renderer.domElement);controls.enableDamping=true;scene.add(new THREE.HemisphereLight(0xffffff,0x7c886c,1.6));for(const [x,y,z,power] of [[4,6,4,1.8],[-4,2,-2,.8]]){const light=new THREE.DirectionalLight(0xffffff,power);light.position.set(x,y,z);scene.add(light)}new ResizeObserver(()=>{const w=container.clientWidth,h=container.clientHeight;renderer.setSize(w,h);camera.aspect=w/h;camera.updateProjectionMatrix()}).observe(container);function animate(){requestAnimationFrame(animate);controls.update();renderer.render(scene,camera)}animate()}catch(e){$('empty').querySelector('p').textContent='3D preview needs WebGL. Downloads will still work.'}
 $('reset').onclick=frame;$('wireframe').onclick=()=>{if(!model)return;const enabled=$('wireframe').getAttribute('aria-pressed')!=='true';$('wireframe').setAttribute('aria-pressed',String(enabled));model.traverse(o=>{const mats=Array.isArray(o.material)?o.material:[o.material];mats.filter(Boolean).forEach(m=>m.wireframe=enabled)})};
 api('/api/status').then(s=>{
-    connected=s.connected;
-    if(connected){
-        $('connectionBadge').textContent='● Colab connection saved';
-        $('connectionBadge').classList.add('connected');
-        $('connectionInfo').textContent=conditioningLabels.get(s.multi_view_conditioning)||'The saved connection will be checked when you generate.';
-    } else {
-        $('connectionBadge').textContent='○ Colab disconnected';
-        $('connectionBadge').classList.remove('connected');
-    }
+    applyBackendState(s);
+    if(files.length===0 && canGenerate()) message(mode==='local'?'Local Apple Silicon engine ready. Add reference images.':'Colab connected. Add reference images.');
     ready();
     queueGeneration();
 }).catch(()=>{
-    $('connectionBadge').textContent='○ Colab disconnected';
-    $('connectionBadge').classList.remove('connected');
+    applyBackendState({connected:false,local_available:false,mode:'disconnected'});
 });
 
 async function importCrops(token) {

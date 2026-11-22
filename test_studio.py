@@ -12,6 +12,7 @@ class StudioTests(unittest.TestCase):
     def setUp(self):
         self.client=TestClient(studio.app)
         studio.connection=None
+        studio.local_enabled=True
         studio.jobs.clear()
 
     def test_worker_without_camera_labels_cannot_generate(self):
@@ -29,9 +30,39 @@ class StudioTests(unittest.TestCase):
         self.assertEqual(self.client.get('/api/notebook').status_code,200)
         self.assertEqual(self.client.get('/api/status',headers={'Host':'evil.example'}).status_code,403)
         self.assertEqual(self.client.post('/api/connect',json={'url':'x'},headers={'Origin':'https://evil.example'}).status_code,403)
+        studio.local_enabled = False
         self.assertEqual(self.client.post('/api/jobs',json={'images':[]}).status_code,409)
+        studio.local_enabled = True
         for url in ['https://example.com/#key='+'a'*32,'https://a.trycloudflare.com:bad/','https://a.trycloudflare.com/#key=short']:
             self.assertEqual(self.client.post('/api/connect',json={'url':url}).status_code,400)
+
+    def test_local_default_mode_and_colab_toggle(self):
+        from unittest.mock import AsyncMock
+        original = httpx.AsyncClient
+        with patch.object(studio, 'is_local_available', return_value=True):
+            st = self.client.get('/api/status').json()
+            self.assertEqual(st['mode'], 'local')
+            self.assertTrue(st['local_available'])
+            self.assertEqual(st['local_info']['target_faces'], 40000)
+            self.assertEqual(st['local_info']['texture_size'], 4096)
+
+            buffer = io.BytesIO()
+            Image.new('RGB', (8, 8), 'red').save(buffer, format='PNG')
+            encoded = [base64.b64encode(buffer.getvalue()).decode()]
+            with patch.object(studio, 'work_local', new_callable=AsyncMock) as work_local:
+                resp = self.client.post('/api/jobs', json={'images': encoded})
+                self.assertEqual(resp.status_code, 200)
+                work_local.assert_called_once()
+            studio.jobs.clear()
+
+            health = {'protocol': 'form-studio-v1', 'ready': True, 'labeled_cameras': True}
+            with patch.object(studio.httpx, 'AsyncClient', lambda **kw: original(
+                transport=httpx.MockTransport(lambda _: httpx.Response(200, json=health)), **kw)):
+                self.assertEqual(self.client.post('/api/connect', json={'url': 'https://test.trycloudflare.com/#key=' + 'a' * 32}).status_code, 200)
+            self.assertEqual(self.client.get('/api/status').json()['mode'], 'colab')
+            disc = self.client.post('/api/disconnect')
+            self.assertEqual(disc.status_code, 200)
+            self.assertEqual(disc.json()['mode'], 'local')
 
     def test_multiview_submission_and_invalid_inputs(self):
         from unittest.mock import AsyncMock
@@ -202,7 +233,7 @@ material.node_tree.links.new(node.outputs['Color'],material.node_tree.nodes.get(
 obj.data.materials.append(material)
 bpy.ops.export_scene.gltf(filepath=sys.argv[1],export_format='GLB')
 """
-            subprocess.run([sys.executable,'-c',source,str(fixture_path)],check=True,capture_output=True)
+            subprocess.run([studio.fbx_python(),'-c',source,str(fixture_path)],check=True,capture_output=True)
             recorded=fixture_path.read_bytes()
         views=[]
         for color in ('red','blue','green','orange','yellow','purple'):

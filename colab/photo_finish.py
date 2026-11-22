@@ -657,9 +657,7 @@ def refine(mesh, images, labels=None):
     weights = np.zeros((h, w), np.float32)
     max_conf = np.zeros((h, w), np.float32)
 
-    for entry in selected:
-        if entry is None:
-            continue
+    def project_entry(entry):
         pic, match, label = entry
         base_label = label.partition('_nose_')[0]
         is_cardinal = base_label in CARDINAL_VIEWS
@@ -778,6 +776,67 @@ def refine(mesh, images, labels=None):
             weighted[yy, xx] += w_cam[:, None] * rgba[:, :3]
             weights[yy, xx] += w_cam
             max_conf[yy, xx] = np.maximum(max_conf[yy, xx], conf_cam)
+
+    horizontal_entries = []
+    vertical_entries = []
+    for idx, entry in enumerate(selected):
+        if entry is None:
+            continue
+        if entry[2].partition('_nose_')[0] in ('top', 'bottom'):
+            vertical_entries.append((idx, entry))
+        else:
+            horizontal_entries.append(entry)
+
+    for entry in horizontal_entries:
+        project_entry(entry)
+
+    if vertical_entries and (weights > 1e-8).any():
+        pass1_mix = np.where(weights > 1e-8, np.clip(max_conf / 0.65, 0.0, 1.0), 0.0).astype('f')
+        pass1_rgb = weighted / np.maximum(weights[:, :, None], 1e-10)
+        pass1_atlas = np.clip(
+            atlas.astype(np.float32) * (1.0 - pass1_mix[:, :, None]) + pass1_rgb * pass1_mix[:, :, None],
+            0,
+            255,
+        )
+        for idx, (pic, match, label) in vertical_entries:
+            ref = refs[idx]
+            if ref is None:
+                continue
+            mask_ref = ref[:, :, 3] > 128
+            ratio = pic.shape[1] / pic.shape[0]
+            base_yaw, elev = match[1], match[2]
+            best_v = None
+            for dy in (0, 90, 180, 270):
+                cand_yaw = (base_yaw + dy) % 360
+                scr, _, aspect = camera(vertices, cand_yaw, elev)
+                scr[:, :2] *= 63
+                fi_r, bary_r, _ = raster(scr, faces, 64, 64)
+                hit_r = fi_r >= 0
+                tex_r = interpolate(uv, faces[fi_r[hit_r]], bary_r[hit_r]).round().astype(int)
+                ren = np.zeros((64, 64, 3), np.float32)
+                ren[hit_r] = pass1_atlas[tex_r[:, 1].clip(0, h - 1), tex_r[:, 0].clip(0, w - 1)]
+                ov = mask_ref & hit_r
+                if not ov.any():
+                    continue
+                iou_v = ov.sum() / (mask_ref | hit_r).sum()
+                target_v = ref[:, :, :3][ov].astype('f')
+                proj_v = ren[ov]
+                gain_v = np.clip((target_v.mean() + 1) / (proj_v.mean() + 1), 0.6, 1.7)
+                err_v = np.abs(target_v - proj_v * gain_v).mean() / 255.0
+                aerr_v = abs(np.log(aspect / ratio))
+                sc_v = iou_v - 0.72 * err_v - 0.18 * min(aerr_v, 2)
+                cand_v = (sc_v, cand_yaw, elev, iou_v, err_v, match[5])
+                if best_v is None or sc_v > best_v[0]:
+                    best_v = cand_v
+            if best_v is not None:
+                match = best_v
+                report[idx]['yaw'] = float(best_v[1])
+                report[idx]['silhouette_iou'] = round(float(best_v[3]), 3)
+                report[idx]['score'] = round(float(best_v[0]), 3)
+            project_entry((pic, match, label))
+    else:
+        for _, entry in vertical_entries:
+            project_entry(entry)
 
     valid = owner >= 0
     mix = np.where(weights > 1e-8, np.clip(max_conf / 0.65, 0.0, 1.0), 0.0).astype('f')

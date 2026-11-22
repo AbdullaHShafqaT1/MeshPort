@@ -1,4 +1,7 @@
 .venv/
+.fbx-venv/
+.mv-venv/
+.engines/
 venv/
 env/
 .fbx-tools/

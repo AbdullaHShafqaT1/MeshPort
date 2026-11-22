@@ -1,0 +1,15 @@
+mlx
+mlx-arsenal
+safetensors
+huggingface-hub
+trimesh
+scikit-image
+PyMCubes
+scipy
+numpy
+pymeshlab
+xatlas
+opencv-python-headless
+numba
+rembg
+onnxruntime

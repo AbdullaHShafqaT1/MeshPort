@@ -203,6 +203,109 @@ async def detect_panels(client: httpx.AsyncClient, source: Image.Image, panels: 
     return views
 
 
+def refine_sheet_boxes(source: Image.Image, views: list[View]) -> list[View]:
+    """Trim boxes that cross solid panel dividers and expand clipped left/right edges."""
+    if not views:
+        return views
+    import numpy as np
+
+    gray = np.asarray(rgb(source).convert("L"), dtype=np.float32)
+    img_h, img_w = gray.shape
+
+    def _is_v_divider(col_slice: np.ndarray, bg: float) -> bool:
+        return float(col_slice.std()) < 28.0 and float((col_slice > bg + 20.0).mean()) > 0.80
+
+    # Step A: trim across any vertical divider line inside a box
+    trimmed: list[View] = []
+    for angle, (x0, y0, x1, y1) in views:
+        x0, y0, x1, y1 = max(0, x0), max(0, y0), min(img_w, x1), min(img_h, y1)
+        w = x1 - x0
+        if w >= 40 and y1 - y0 >= 20:
+            g = gray[y0:y1, x0:x1]
+            bg = float(np.percentile(g, 15))
+            dividers = [
+                cx for cx in range(max(1, int(0.05 * w)), min(w - 1, int(0.95 * w)))
+                if _is_v_divider(g[:, cx], bg)
+            ]
+            if dividers:
+                best_cx = max(dividers, key=lambda c: float(g[:, c].mean()))
+                left_fg = float((g[:, :best_cx] > bg + 20.0).sum())
+                right_fg = float((g[:, best_cx + 1:] > bg + 20.0).sum())
+                if right_fg > left_fg and left_fg < 0.30 * right_fg:
+                    x0 = min(x1 - 20, x0 + best_cx + 4)
+                elif left_fg > right_fg and right_fg < 0.30 * left_fg:
+                    x1 = max(x0 + 20, x0 + best_cx - 4)
+        trimmed.append((angle, (x0, y0, x1, y1)))
+
+    # Step B: expand clipped left/right edges into adjacent empty space
+    refined: list[View] = []
+    for idx, (angle, (x0, y0, x1, y1)) in enumerate(trimmed):
+        w, h = x1 - x0, y1 - y0
+        if w < 20 or h < 20:
+            refined.append((angle, (x0, y0, x1, y1)))
+            continue
+        g = gray[y0:y1, x0:x1]
+        bg = float(np.percentile(g, 15))
+        max_exp = int(0.8 * w)
+
+        # Neighbor bounds for boxes overlapping in y
+        left_lim = max(0, x0 - max_exp)
+        right_lim = min(img_w, x1 + max_exp)
+        for j, (_, (ox0, oy0, ox1, oy1)) in enumerate(trimmed):
+            if j == idx:
+                continue
+            if min(y1, oy1) - max(y0, oy0) > 0.25 * min(h, oy1 - oy0):
+                if ox1 <= x0:
+                    left_lim = max(left_lim, ox1 + 2)
+                if ox0 >= x1:
+                    right_lim = min(right_lim, ox0 - 2)
+
+        # Check right edge
+        if float((gray[y0:y1, max(x0, x1 - 4):x1] > bg + 22.0).mean()) > 0.10 and x1 < right_lim:
+            quiet = 0
+            last_fg = x1
+            for cx in range(x1, right_lim):
+                col = gray[y0:y1, cx]
+                if _is_v_divider(col, bg):
+                    last_fg = max(x1, cx - 4)
+                    break
+                if float((col > bg + 18.0).mean()) < 0.04:
+                    quiet += 1
+                    if quiet >= 8:
+                        last_fg = cx - quiet + 12
+                        break
+                else:
+                    quiet = 0
+                    last_fg = cx + 1
+            else:
+                last_fg = right_lim
+            x1 = min(right_lim, max(x1, last_fg))
+
+        # Check left edge
+        if float((gray[y0:y1, x0:min(x1, x0 + 4)] > bg + 22.0).mean()) > 0.10 and x0 > left_lim:
+            quiet = 0
+            first_fg = x0
+            for cx in range(x0 - 1, left_lim - 1, -1):
+                col = gray[y0:y1, cx]
+                if _is_v_divider(col, bg):
+                    first_fg = min(x0, cx + 4)
+                    break
+                if float((col > bg + 18.0).mean()) < 0.04:
+                    quiet += 1
+                    if quiet >= 8:
+                        first_fg = cx + quiet - 12
+                        break
+                else:
+                    quiet = 0
+                    first_fg = cx
+            else:
+                first_fg = left_lim
+            x0 = max(left_lim, min(x0, first_fg))
+
+        refined.append((angle, (x0, y0, x1, y1)))
+    return refined
+
+
 async def detect_sheet(client: httpx.AsyncClient, source: Image.Image) -> list[View]:
     image, content = await run_in_threadpool(model_image, source)
     rows = await vision(client, image, SHEET_PROMPT, keep_alive="30s")
@@ -232,7 +335,7 @@ async def detect_sheet(client: httpx.AsyncClient, source: Image.Image) -> list[V
             pass
         else:
             add_perspective(views, rows, content, source.size)
-    return views
+    return refine_sheet_boxes(source, views)
 
 
 async def identify_angle(source: Image.Image, client: httpx.AsyncClient) -> str:
